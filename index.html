@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#070816" />
+    <title>Photo Rater AI</title>
+    <link rel="stylesheet" href="./src/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="top-bar" aria-label="Photo Rater AI app header">
+        <div class="brand-mark" aria-hidden="true">◇</div>
+        <div>
+          <p class="brand-kicker">Photo Rater AI</p>
+          <strong>Private beta</strong>
+        </div>
+      </header>
+
+      <section class="hero-card">
+        <div class="hero-content">
+          <p class="eyebrow">AI photo curation studio</p>
+          <h1>Find your strongest profile photos in minutes.</h1>
+          <p class="hero-copy">Bulk upload a full shoot, review it in a premium mobile gallery, and score sharpness, lighting, composition, expression, eye contact, and social appeal on a strict 1–10 scale.</p>
+          <div class="hero-pills" aria-label="Product highlights">
+            <span>Hundreds of uploads</span>
+            <span>Strict AI rubric</span>
+            <span>Learns preferences</span>
+          </div>
+        </div>
+        <div class="upload-card" id="uploadDropzone">
+          <span class="upload-icon" aria-hidden="true">✦</span>
+          <h2>Upload your camera roll</h2>
+          <p>Choose JPG, PNG, HEIC, or WebP images. Newest batches appear first.</p>
+          <div class="actions">
+            <label class="upload-button">Select photos<input id="photoInput" type="file" accept="image/*" multiple /></label>
+            <button id="scoreButton" type="button" disabled>Score unscored</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="stats-grid" aria-label="Photo rating summary">
+        <article><span>Uploaded</span><strong id="uploadedCount">0</strong></article>
+        <article><span>Scored</span><strong id="scoredCount">0</strong></article>
+        <article><span>Average</span><strong id="averageScore">—</strong></article>
+        <article><span>Preference likes</span><strong id="likedCount">0</strong></article>
+      </section>
+
+      <section class="workspace">
+        <div class="gallery-panel"><div class="section-heading"><div><p class="eyebrow small">Batch review</p><h2>Gallery</h2></div><p>Tap a card to inspect category scores and preference signals.</p></div><div id="gallery" class="photo-grid empty-state">Drop in a full shoot or camera roll export to begin comparing candidates.</div></div>
+        <aside id="detailPanel" class="detail-panel"><div class="empty-state">Select a photo to inspect scores and preference signals.</div></aside>
+      </section>
+    </main>
+    <script type="module" src="./src/app.js"></script>
+  </body>
+</html>
