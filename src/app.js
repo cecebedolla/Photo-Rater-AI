@@ -9,22 +9,10 @@ const reasonOptions = ['Great expression', 'Flattering pose', 'Good lighting', '
 const state = { photos: [], activeId: null, profile: loadPreferenceProfile(), training: loadTrainingExamples(), isScoring: false, scoringDone: 0, scoringTotal: 0 };
 
 const elements = {
-  input: document.querySelector('#photoInput'),
-  scoreButton: document.querySelector('#scoreButton'),
-  gallery: document.querySelector('#gallery'),
-  detailPanel: document.querySelector('#detailPanel'),
-  uploadedCount: document.querySelector('#uploadedCount'),
-  scoredCount: document.querySelector('#scoredCount'),
-  averageScore: document.querySelector('#averageScore'),
-  likedCount: document.querySelector('#likedCount'),
-  redFlagCount: document.querySelector('#redFlagCount'),
-  trainingCount: document.querySelector('#trainingCount'),
-  topCeceScore: document.querySelector('#topCeceScore'),
-  topCeceLabel: document.querySelector('#topCeceLabel'),
-  galleryHint: document.querySelector('#galleryHint'),
-  createBackupButton: document.querySelector('#createBackupButton'),
-  restoreBackupInput: document.querySelector('#restoreBackupInput'),
-  backupStatus: document.querySelector('#backupStatus'),
+  input: document.querySelector('#photoInput'), scoreButton: document.querySelector('#scoreButton'), gallery: document.querySelector('#gallery'), detailPanel: document.querySelector('#detailPanel'),
+  uploadedCount: document.querySelector('#uploadedCount'), scoredCount: document.querySelector('#scoredCount'), averageScore: document.querySelector('#averageScore'), likedCount: document.querySelector('#likedCount'), redFlagCount: document.querySelector('#redFlagCount'), trainingCount: document.querySelector('#trainingCount'),
+  topCeceScore: document.querySelector('#topCeceScore'), topCeceLabel: document.querySelector('#topCeceLabel'), galleryHint: document.querySelector('#galleryHint'), createBackupButton: document.querySelector('#createBackupButton'), restoreBackupInput: document.querySelector('#restoreBackupInput'), backupStatus: document.querySelector('#backupStatus'),
+  calibrationReadiness: document.querySelector('#calibrationReadiness'), calibrationProgressBar: document.querySelector('#calibrationProgressBar'), calibrationAdvice: document.querySelector('#calibrationAdvice'), lowRatingCount: document.querySelector('#lowRatingCount'), midRatingCount: document.querySelector('#midRatingCount'), highRatingCount: document.querySelector('#highRatingCount'), trainingAverage: document.querySelector('#trainingAverage'), topReasons: document.querySelector('#topReasons'), scoreDisagreements: document.querySelector('#scoreDisagreements'),
 };
 
 elements.input.addEventListener('change', (event) => { importPhotos(event.target.files ?? []); event.target.value = ''; });
@@ -41,7 +29,7 @@ function importPhotos(files) {
     return { id: `${stableKey}-${crypto.randomUUID()}`, stableKey, name: file.name, size: file.size, type: file.type, previewUrl: URL.createObjectURL(file), uploadedAt: Date.now(), preference: saved.preference ?? 'neutral', userRating: saved.userRating ?? null, reasons: saved.reasons ?? [], userNote: saved.userNote ?? '', trainingSavedAt: saved.savedAt ?? null };
   });
   state.photos = [...mapped, ...state.photos];
-  state.activeId = state.activeId ?? mapped[0]?.id ?? null;
+  state.activeId = mapped[0]?.id ?? state.activeId;
   render();
 }
 
@@ -53,7 +41,7 @@ async function scoreAllPhotos() {
   async function worker() {
     while (nextIndex < queue.length) {
       const photo = queue[nextIndex++];
-      try { Object.assign(photo, await scorePhoto(photo, state.profile)); }
+      try { Object.assign(photo, await scorePhoto(photo, state.profile)); if (state.training[photo.stableKey]) persistTraining(photo); }
       catch (error) { photo.error = error instanceof Error ? error.message : 'Scoring failed'; }
       state.scoringDone += 1; updateProgress();
       if (state.scoringDone % 5 === 0 || state.scoringDone === state.scoringTotal) render();
@@ -72,7 +60,7 @@ function updateProgress() {
 }
 
 function updatePreference(photoId, preference) {
-  const photo = state.photos.find((item) => item.id === photoId); if (!photo) return;
+  const photo = findPhoto(photoId); if (!photo) return;
   photo.preference = preference;
   state.profile.likedPhotoIds = state.profile.likedPhotoIds.filter((id) => id !== photo.stableKey);
   state.profile.dislikedPhotoIds = state.profile.dislikedPhotoIds.filter((id) => id !== photo.stableKey);
@@ -84,125 +72,64 @@ function updatePreference(photoId, preference) {
   persistTraining(photo); render();
 }
 
-function updateTraining(photoId, patch) {
-  const photo = state.photos.find((item) => item.id === photoId); if (!photo) return;
-  Object.assign(photo, patch); photo.trainingSavedAt = null; persistTraining(photo); render();
-}
+function updateTraining(photoId, patch) { const photo = findPhoto(photoId); if (!photo) return; Object.assign(photo, patch); photo.trainingSavedAt = null; persistTraining(photo); render(); }
+function toggleReason(photoId, reason) { const photo = findPhoto(photoId); if (!photo) return; photo.reasons = photo.reasons.includes(reason) ? photo.reasons.filter((item) => item !== reason) : [...photo.reasons, reason]; photo.trainingSavedAt = null; persistTraining(photo); render(); }
 
-function toggleReason(photoId, reason) {
-  const photo = state.photos.find((item) => item.id === photoId); if (!photo) return;
-  photo.reasons = photo.reasons.includes(reason) ? photo.reasons.filter((item) => item !== reason) : [...photo.reasons, reason];
-  photo.trainingSavedAt = null; persistTraining(photo); render();
-}
-
-function commitTraining(photoId) {
-  const photo = state.photos.find((item) => item.id === photoId); if (!photo) return;
+function commitTraining(photoId, advance = false) {
+  const photo = findPhoto(photoId); if (!photo) return;
   const note = elements.detailPanel.querySelector('#trainingNote')?.value.trim() ?? '';
-  if (!photo.userRating) {
-    photo.trainingMessage = 'Choose a 1–10 rating before saving.';
-    render();
-    return;
-  }
-  photo.userNote = note;
-  photo.trainingSavedAt = Date.now();
-  photo.trainingMessage = '';
-  persistTraining(photo);
-  render();
+  if (!photo.userRating) { photo.trainingMessage = 'Choose a 1–10 rating before saving.'; render(); return; }
+  photo.userNote = note; photo.trainingSavedAt = Date.now(); photo.trainingMessage = ''; persistTraining(photo);
+  if (advance) moveActive(1); else render();
 }
 
 function persistTraining(photo) {
-  state.training[photo.stableKey] = { name: photo.name, userRating: photo.userRating, reasons: photo.reasons, userNote: photo.userNote, preference: photo.preference, savedAt: photo.trainingSavedAt, updatedAt: Date.now() };
+  state.training[photo.stableKey] = { name: photo.name, userRating: photo.userRating, reasons: photo.reasons, userNote: photo.userNote, preference: photo.preference, savedAt: photo.trainingSavedAt, updatedAt: Date.now(), automatedScore: photo.ceceScore ?? photo.overall ?? null };
   localStorage.setItem(trainingStorageKey, JSON.stringify(state.training));
 }
 
-async function createBackup() {
-  const savedExamples = Object.values(state.training).filter((item) => item.savedAt && item.userRating);
-  if (!savedExamples.length) {
-    setBackupStatus('Save at least one training rating before creating a backup.', true);
-    return;
-  }
+function moveActive(direction) {
+  if (!state.photos.length) return;
+  const index = Math.max(0, state.photos.findIndex((photo) => photo.id === state.activeId));
+  const next = (index + direction + state.photos.length) % state.photos.length;
+  state.activeId = state.photos[next].id;
+  render();
+  window.setTimeout(() => elements.detailPanel.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
+}
 
+async function createBackup() {
+  const savedExamples = savedTrainingExamples();
+  if (!savedExamples.length) { setBackupStatus('Save at least one training rating before creating a backup.', true); return; }
   const createdAt = new Date();
-  const backup = {
-    format: backupFormat,
-    version: backupVersion,
-    createdAt: createdAt.toISOString(),
-    app: 'Photo Rater AI',
-    summary: { trainingExamples: savedExamples.length, likes: state.profile.likedPhotoIds.length, dislikes: state.profile.dislikedPhotoIds.length },
-    preferenceProfile: state.profile,
-    trainingExamples: state.training,
-  };
+  const backup = { format: backupFormat, version: backupVersion, createdAt: createdAt.toISOString(), app: 'Photo Rater AI', summary: { trainingExamples: savedExamples.length, likes: state.profile.likedPhotoIds.length, dislikes: state.profile.dislikedPhotoIds.length }, preferenceProfile: state.profile, trainingExamples: state.training };
   const filename = `Cece-PhotoAI-Backup-${createdAt.toISOString().slice(0, 10)}.json`;
   const file = new File([JSON.stringify(backup, null, 2)], filename, { type: 'application/json' });
-
   try {
-    if (navigator.share && navigator.canShare?.({ files: [file] })) {
-      await navigator.share({ title: 'Cece Photo AI Backup', text: 'Save this profile backup to iCloud Drive using Save to Files.', files: [file] });
-    } else {
-      downloadFile(file, filename);
-    }
-    localStorage.setItem(lastBackupStorageKey, createdAt.toISOString());
-    setBackupStatus(`Backup created ${createdAt.toLocaleString()}. Choose Save to Files, then iCloud Drive.`);
+    if (navigator.share && navigator.canShare?.({ files: [file] })) await navigator.share({ title: 'Cece Photo AI Backup', text: 'Save this profile backup to iCloud Drive using Save to Files.', files: [file] });
+    else downloadFile(file, filename);
+    localStorage.setItem(lastBackupStorageKey, createdAt.toISOString()); setBackupStatus(`Backup created ${createdAt.toLocaleString()}. Choose Save to Files, then iCloud Drive.`);
   } catch (error) {
-    if (error?.name === 'AbortError') {
-      setBackupStatus('Backup sharing was canceled. Your training data is still safe in this browser.', true);
-      return;
-    }
-    downloadFile(file, filename);
-    localStorage.setItem(lastBackupStorageKey, createdAt.toISOString());
-    setBackupStatus('Backup downloaded. Open it in Files and move it to iCloud Drive.');
+    if (error?.name === 'AbortError') { setBackupStatus('Backup sharing was canceled. Your training data is still safe in this browser.', true); return; }
+    downloadFile(file, filename); localStorage.setItem(lastBackupStorageKey, createdAt.toISOString()); setBackupStatus('Backup downloaded. Open it in Files and move it to iCloud Drive.');
   }
 }
 
-function downloadFile(file, filename) {
-  const url = URL.createObjectURL(file);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
+function downloadFile(file, filename) { const url = URL.createObjectURL(file); const link = document.createElement('a'); link.href = url; link.download = filename; document.body.appendChild(link); link.click(); link.remove(); window.setTimeout(() => URL.revokeObjectURL(url), 1000); }
 
 async function restoreBackup(file) {
-  elements.restoreBackupInput.value = '';
-  if (!file) return;
+  elements.restoreBackupInput.value = ''; if (!file) return;
   try {
     const parsed = JSON.parse(await file.text());
     if (parsed?.format !== backupFormat || !parsed.trainingExamples || !parsed.preferenceProfile) throw new Error('This is not a valid Cece Photo AI backup.');
     const count = Object.values(parsed.trainingExamples).filter((item) => item.savedAt && item.userRating).length;
-    const approved = window.confirm(`Restore ${count} saved training examples from this backup? This will replace the training profile currently stored in this browser.`);
-    if (!approved) { setBackupStatus('Restore canceled.'); return; }
-
-    state.training = parsed.trainingExamples;
-    state.profile = { ...structuredClone(defaultPreferenceProfile), ...parsed.preferenceProfile };
-    localStorage.setItem(trainingStorageKey, JSON.stringify(state.training));
-    localStorage.setItem(preferenceStorageKey, JSON.stringify(state.profile));
-    hydrateOpenPhotosFromTraining();
-    setBackupStatus(`Restored ${count} training examples from ${file.name}.`);
-    render();
-  } catch (error) {
-    setBackupStatus(error instanceof Error ? error.message : 'The backup could not be restored.', true);
-  }
+    if (!window.confirm(`Restore ${count} saved training examples from this backup? This will replace the training profile currently stored in this browser.`)) { setBackupStatus('Restore canceled.'); return; }
+    state.training = parsed.trainingExamples; state.profile = { ...structuredClone(defaultPreferenceProfile), ...parsed.preferenceProfile };
+    localStorage.setItem(trainingStorageKey, JSON.stringify(state.training)); localStorage.setItem(preferenceStorageKey, JSON.stringify(state.profile)); hydrateOpenPhotosFromTraining(); setBackupStatus(`Restored ${count} training examples from ${file.name}.`); render();
+  } catch (error) { setBackupStatus(error instanceof Error ? error.message : 'The backup could not be restored.', true); }
 }
 
-function hydrateOpenPhotosFromTraining() {
-  state.photos.forEach((photo) => {
-    const saved = state.training[photo.stableKey];
-    if (!saved) return;
-    photo.preference = saved.preference ?? 'neutral';
-    photo.userRating = saved.userRating ?? null;
-    photo.reasons = saved.reasons ?? [];
-    photo.userNote = saved.userNote ?? '';
-    photo.trainingSavedAt = saved.savedAt ?? null;
-  });
-}
-
-function setBackupStatus(message, isError = false) {
-  elements.backupStatus.textContent = message;
-  elements.backupStatus.classList.toggle('error', isError);
-}
+function hydrateOpenPhotosFromTraining() { state.photos.forEach((photo) => { const saved = state.training[photo.stableKey]; if (!saved) return; photo.preference = saved.preference ?? 'neutral'; photo.userRating = saved.userRating ?? null; photo.reasons = saved.reasons ?? []; photo.userNote = saved.userNote ?? ''; photo.trainingSavedAt = saved.savedAt ?? null; }); }
+function setBackupStatus(message, isError = false) { elements.backupStatus.textContent = message; elements.backupStatus.classList.toggle('error', isError); }
 
 function render() {
   const scored = state.photos.filter((photo) => photo.overall);
@@ -210,43 +137,63 @@ function render() {
   const topPhoto = scored.toSorted((a, b) => (b.ceceScore ?? b.overall) - (a.ceceScore ?? a.overall))[0];
   const totalRedFlags = scored.reduce((sum, photo) => sum + (photo.redFlags?.filter((flag) => flag.key !== 'visionPending').length ?? 0), 0);
   elements.averageScore.textContent = scored.length ? `${Math.round(scored.reduce((sum, photo) => sum + photo.overall, 0) / scored.length)}/10` : '—';
-  elements.likedCount.textContent = state.profile.likedPhotoIds.length; elements.redFlagCount.textContent = totalRedFlags;
-  elements.trainingCount.textContent = Object.values(state.training).filter((item) => item.savedAt && item.userRating).length;
+  elements.likedCount.textContent = state.profile.likedPhotoIds.length; elements.redFlagCount.textContent = totalRedFlags; elements.trainingCount.textContent = savedTrainingExamples().length;
   elements.topCeceScore.textContent = topPhoto ? `${topPhoto.ceceScore ?? topPhoto.overall}/10` : '—';
   elements.topCeceLabel.textContent = topPhoto ? `${topPhoto.name} currently has the strongest technical score.` : 'Upload photos to discover the strongest lead image.';
   elements.galleryHint.textContent = state.isScoring ? `${state.scoringDone}/${state.scoringTotal} scored` : state.photos.length ? `${state.photos.length} candidate${state.photos.length === 1 ? '' : 's'}` : 'Ready';
   elements.scoreButton.disabled = !state.photos.length || state.isScoring; elements.scoreButton.textContent = state.isScoring ? `Scoring ${state.scoringDone}/${state.scoringTotal}` : 'Score unscored';
-  renderBackupStatus(); renderGallery(); renderDetail();
+  renderCalibration(); renderBackupStatus(); renderGallery(); renderDetail();
 }
 
-function renderBackupStatus() {
-  const lastBackup = localStorage.getItem(lastBackupStorageKey);
-  if (lastBackup && !elements.backupStatus.classList.contains('error')) elements.backupStatus.textContent = `Last backup created ${new Date(lastBackup).toLocaleString()}.`;
+function renderCalibration() {
+  const examples = savedTrainingExamples();
+  const lows = examples.filter((item) => item.userRating <= 3); const mids = examples.filter((item) => item.userRating >= 4 && item.userRating <= 7); const highs = examples.filter((item) => item.userRating >= 8);
+  elements.lowRatingCount.textContent = lows.length; elements.midRatingCount.textContent = mids.length; elements.highRatingCount.textContent = highs.length;
+  elements.trainingAverage.textContent = examples.length ? `${(examples.reduce((sum, item) => sum + item.userRating, 0) / examples.length).toFixed(1)}/10` : '—';
+  const progress = Math.min(100, Math.round((examples.length / 30) * 100)); elements.calibrationProgressBar.style.width = `${progress}%`;
+  const smallest = Math.min(lows.length, mids.length, highs.length);
+  elements.calibrationReadiness.textContent = examples.length >= 30 && smallest >= 7 ? 'Ready for vision testing' : `${examples.length}/30 examples`;
+  if (!examples.length) elements.calibrationAdvice.textContent = 'Start with a balanced mix: photos you love, feel neutral about, and would never post.';
+  else if (lows.length < 7) elements.calibrationAdvice.textContent = `Add at least ${7 - lows.length} more low-rated photo${7 - lows.length === 1 ? '' : 's'} (1–3) so the app learns your deal breakers.`;
+  else if (mids.length < 7) elements.calibrationAdvice.textContent = `Add at least ${7 - mids.length} more middle-rated photo${7 - mids.length === 1 ? '' : 's'} (4–7) so it learns your gray area.`;
+  else if (highs.length < 7) elements.calibrationAdvice.textContent = `Add at least ${7 - highs.length} more high-rated photo${7 - highs.length === 1 ? '' : 's'} (8–10) so it learns what excellence looks like to you.`;
+  else elements.calibrationAdvice.textContent = examples.length < 30 ? `Good balance. Add ${30 - examples.length} more varied example${30 - examples.length === 1 ? '' : 's'} before vision testing.` : 'Your dataset is balanced enough for the first real vision calibration test.';
+  const counts = new Map(); examples.flatMap((item) => item.reasons ?? []).forEach((reason) => counts.set(reason, (counts.get(reason) ?? 0) + 1));
+  const reasons = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+  elements.topReasons.innerHTML = reasons.length ? reasons.map(([reason, count]) => `<p><strong>${escapeHtml(reason)}</strong><span>${count}</span></p>`).join('') : '<p>No saved reasons yet.</p>';
+  const gaps = examples.filter((item) => Number.isFinite(item.automatedScore)).map((item) => ({ ...item, gap: Math.abs(item.userRating - item.automatedScore) })).sort((a, b) => b.gap - a.gap).slice(0, 5);
+  elements.scoreDisagreements.innerHTML = gaps.length ? gaps.map((item) => `<p><strong>${escapeHtml(item.name)}</strong><span>You ${item.userRating} · App ${item.automatedScore}</span></p>`).join('') : '<p>Score and save photos to compare your judgment with the automated score.</p>';
 }
+
+function renderBackupStatus() { const lastBackup = localStorage.getItem(lastBackupStorageKey); if (lastBackup && !elements.backupStatus.classList.contains('error')) elements.backupStatus.textContent = `Last backup created ${new Date(lastBackup).toLocaleString()}.`; }
 
 function renderGallery() {
   if (!state.photos.length) { elements.gallery.className = 'photo-grid empty-state'; elements.gallery.textContent = 'Drop in a full shoot or camera roll export to begin comparing candidates.'; return; }
   elements.gallery.className = 'photo-grid';
-  elements.gallery.innerHTML = state.photos.map((photo) => `<button class="photo-tile ${photo.id === state.activeId ? 'active' : ''}" data-photo-id="${photo.id}"><img src="${photo.previewUrl}" alt="${escapeHtml(photo.name)}" loading="lazy"><span>${photo.userRating ? `You ${photo.userRating}` : photo.error ? 'Error' : photo.ceceScore ? `Cece ${photo.ceceScore}` : photo.overall ? `${photo.overall}/10` : 'Queued'}</span>${photo.redFlags?.filter((flag) => flag.key !== 'visionPending').length ? `<em>${photo.redFlags.filter((flag) => flag.key !== 'visionPending').length} flag${photo.redFlags.filter((flag) => flag.key !== 'visionPending').length === 1 ? '' : 's'}</em>` : ''}</button>`).join('');
+  elements.gallery.innerHTML = state.photos.map((photo) => `<button class="photo-tile ${photo.id === state.activeId ? 'active' : ''}" data-photo-id="${photo.id}"><img src="${photo.previewUrl}" alt="${escapeHtml(photo.name)}" loading="lazy"><span>${photo.userRating ? `You ${photo.userRating}` : photo.error ? 'Error' : photo.ceceScore ? `Cece ${photo.ceceScore}` : photo.overall ? `${photo.overall}/10` : 'Queued'}</span>${photo.trainingSavedAt ? '<i>Saved</i>' : ''}${photo.redFlags?.filter((flag) => flag.key !== 'visionPending').length ? `<em>${photo.redFlags.filter((flag) => flag.key !== 'visionPending').length} flag${photo.redFlags.filter((flag) => flag.key !== 'visionPending').length === 1 ? '' : 's'}</em>` : ''}</button>`).join('');
   elements.gallery.querySelectorAll('[data-photo-id]').forEach((button) => button.addEventListener('click', () => { state.activeId = button.dataset.photoId; render(); }));
 }
 
 function renderDetail() {
-  const photo = state.photos.find((item) => item.id === state.activeId) ?? state.photos[0];
+  const photo = findPhoto(state.activeId) ?? state.photos[0];
   if (!photo) { elements.detailPanel.innerHTML = '<div class="empty-state">Select a photo to inspect scores and preference signals.</div>'; return; }
   if (photo.error) { elements.detailPanel.innerHTML = `<img class="detail-image" src="${photo.previewUrl}" alt="${escapeHtml(photo.name)}"><div class="empty-state">This image could not be scored: ${escapeHtml(photo.error)}</div>`; return; }
   const redFlags = photo.redFlags?.length ? photo.redFlags : [{ label: 'Pending scan', advice: 'Run scoring to surface technical publish-risk flags.' }];
   const savedLabel = photo.trainingSavedAt ? `Saved ${new Date(photo.trainingSavedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : 'Not saved yet';
-  elements.detailPanel.innerHTML = `<img class="detail-image" src="${photo.previewUrl}" alt="${escapeHtml(photo.name)}"><div class="detail-header"><div><h2>${escapeHtml(photo.name)}</h2><p>${formatBytes(photo.size)}</p></div><strong>${photo.userRating ? `You ${photo.userRating}/10` : photo.ceceScore ? `Cece ${photo.ceceScore}/10` : photo.overall ? `${photo.overall}/10` : 'Not scored'}</strong></div>
-  <section class="training-card"><h3>Teach the Cece Score</h3><p>Rate this photo the way you would personally judge it for posting.</p><div class="rating-buttons">${Array.from({ length: 10 }, (_, i) => i + 1).map((value) => `<button data-user-rating="${value}" class="${photo.userRating === value ? 'selected' : ''}">${value}</button>`).join('')}</div><div class="reason-chips">${reasonOptions.map((reason) => `<button data-reason="${escapeHtml(reason)}" class="${photo.reasons.includes(reason) ? 'selected' : ''}">${escapeHtml(reason)}</button>`).join('')}</div><label class="training-note">Why?<textarea id="trainingNote" placeholder="Example: I love the pose and social vibe, even though the lighting is dark.">${escapeHtml(photo.userNote)}</textarea></label><div class="training-save-row"><button class="save-training-button" data-save-training>Save training</button><span class="training-save-status ${photo.trainingSavedAt ? 'saved' : ''}">${escapeHtml(photo.trainingMessage || savedLabel)}</span></div></section>
+  elements.detailPanel.innerHTML = `<div class="detail-navigation"><button data-move="-1">← Previous</button><span>${state.photos.findIndex((item) => item.id === photo.id) + 1} of ${state.photos.length}</span><button data-move="1">Next →</button></div><img class="detail-image" src="${photo.previewUrl}" alt="${escapeHtml(photo.name)}"><div class="detail-header"><div><h2>${escapeHtml(photo.name)}</h2><p>${formatBytes(photo.size)}</p></div><strong>${photo.userRating ? `You ${photo.userRating}/10` : photo.ceceScore ? `Cece ${photo.ceceScore}/10` : photo.overall ? `${photo.overall}/10` : 'Not scored'}</strong></div>
+  <section class="training-card"><h3>Teach the Cece Score</h3><p>Rate this photo the way you would personally judge it for posting.</p><div class="rating-buttons">${Array.from({ length: 10 }, (_, i) => i + 1).map((value) => `<button data-user-rating="${value}" class="${photo.userRating === value ? 'selected' : ''}">${value}</button>`).join('')}</div><div class="reason-chips">${reasonOptions.map((reason) => `<button data-reason="${escapeHtml(reason)}" class="${photo.reasons.includes(reason) ? 'selected' : ''}">${escapeHtml(reason)}</button>`).join('')}</div><label class="training-note">Why?<textarea id="trainingNote" placeholder="Example: I love the pose and social vibe, even though the lighting is dark.">${escapeHtml(photo.userNote)}</textarea></label><div class="training-save-row"><button class="save-training-button" data-save-training>Save</button><button class="save-next-button" data-save-next>Save & next</button><span class="training-save-status ${photo.trainingSavedAt ? 'saved' : ''}">${escapeHtml(photo.trainingMessage || savedLabel)}</span></div></section>
   <div class="cece-card"><span>Current automated score</span><b>${photo.ceceScore ? `${photo.ceceScore}/10` : 'Pending'}</b><p>Technical screening only. Your rating above is the training truth for future vision calibration.</p></div><div class="score-list">${ratingCategories.map((category) => `<div class="score-row"><span>${category.label}</span><meter min="1" max="10" value="${photo.scores?.[category.key] ?? 1}"></meter><b>${photo.scores?.[category.key] ?? '—'}</b></div>`).join('')}</div><div class="red-flag-list"><h3>Red flags</h3>${redFlags.map((flag) => `<article><strong>${escapeHtml(flag.label)}</strong><p>${escapeHtml(flag.advice)}</p></article>`).join('')}</div><div class="preference-actions"><button class="${photo.preference === 'liked' ? 'selected' : ''}" data-pref="liked">Like</button><button class="${photo.preference === 'disliked' ? 'selected' : ''}" data-pref="disliked">Dislike</button><button class="${photo.preference === 'neutral' ? 'selected-muted' : ''}" data-pref="neutral">Neutral</button></div><ul class="notes">${(photo.aiNotes ?? ['Run scoring to generate conservative quality feedback.']).map((note) => `<li>${escapeHtml(note)}</li>`).join('')}</ul>`;
   elements.detailPanel.querySelectorAll('[data-pref]').forEach((button) => button.addEventListener('click', () => updatePreference(photo.id, button.dataset.pref)));
   elements.detailPanel.querySelectorAll('[data-user-rating]').forEach((button) => button.addEventListener('click', () => updateTraining(photo.id, { userRating: Number(button.dataset.userRating) })));
   elements.detailPanel.querySelectorAll('[data-reason]').forEach((button) => button.addEventListener('click', () => toggleReason(photo.id, button.dataset.reason)));
   elements.detailPanel.querySelector('[data-save-training]')?.addEventListener('click', () => commitTraining(photo.id));
+  elements.detailPanel.querySelector('[data-save-next]')?.addEventListener('click', () => commitTraining(photo.id, true));
+  elements.detailPanel.querySelectorAll('[data-move]').forEach((button) => button.addEventListener('click', () => moveActive(Number(button.dataset.move))));
   elements.detailPanel.querySelector('#trainingNote')?.addEventListener('input', () => { photo.trainingSavedAt = null; });
 }
 
+function savedTrainingExamples() { return Object.values(state.training).filter((item) => item.savedAt && item.userRating); }
+function findPhoto(photoId) { return state.photos.find((item) => item.id === photoId); }
 function tuneWeights(weights, photo, preference) { if (!photo?.scores || preference === 'neutral') return weights; const direction = preference === 'liked' ? 0.04 : -0.03; return Object.fromEntries(ratingCategories.map(({ key }) => [key, Math.max(0.6, Math.min(1.6, weights[key] + (photo.scores[key] - 5) * direction))])); }
 function loadPreferenceProfile() { const stored = localStorage.getItem(preferenceStorageKey); if (!stored) return structuredClone(defaultPreferenceProfile); try { return { ...defaultPreferenceProfile, ...JSON.parse(stored) }; } catch { return structuredClone(defaultPreferenceProfile); } }
 function loadTrainingExamples() { const stored = localStorage.getItem(trainingStorageKey); if (!stored) return {}; try { return JSON.parse(stored); } catch { return {}; } }
