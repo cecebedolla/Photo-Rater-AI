@@ -2,15 +2,35 @@ import { defaultPreferenceProfile, ratingCategories, scorePhoto } from './aiScor
 
 const preferenceStorageKey = 'photo-rater-ai.preference-profile';
 const trainingStorageKey = 'photo-rater-ai.training-examples';
+const lastBackupStorageKey = 'photo-rater-ai.last-backup';
+const backupFormat = 'cece-photo-profile';
+const backupVersion = 1;
 const reasonOptions = ['Great expression', 'Flattering pose', 'Good lighting', 'Strong social vibe', 'Amazing setting', 'Awkward expression', 'Unflattering pose', 'Bad lighting', 'Blurry', 'Distracting background'];
 const state = { photos: [], activeId: null, profile: loadPreferenceProfile(), training: loadTrainingExamples(), isScoring: false, scoringDone: 0, scoringTotal: 0 };
 
 const elements = {
-  input: document.querySelector('#photoInput'), scoreButton: document.querySelector('#scoreButton'), gallery: document.querySelector('#gallery'), detailPanel: document.querySelector('#detailPanel'), uploadedCount: document.querySelector('#uploadedCount'), scoredCount: document.querySelector('#scoredCount'), averageScore: document.querySelector('#averageScore'), likedCount: document.querySelector('#likedCount'), redFlagCount: document.querySelector('#redFlagCount'), trainingCount: document.querySelector('#trainingCount'), topCeceScore: document.querySelector('#topCeceScore'), topCeceLabel: document.querySelector('#topCeceLabel'), galleryHint: document.querySelector('#galleryHint'),
+  input: document.querySelector('#photoInput'),
+  scoreButton: document.querySelector('#scoreButton'),
+  gallery: document.querySelector('#gallery'),
+  detailPanel: document.querySelector('#detailPanel'),
+  uploadedCount: document.querySelector('#uploadedCount'),
+  scoredCount: document.querySelector('#scoredCount'),
+  averageScore: document.querySelector('#averageScore'),
+  likedCount: document.querySelector('#likedCount'),
+  redFlagCount: document.querySelector('#redFlagCount'),
+  trainingCount: document.querySelector('#trainingCount'),
+  topCeceScore: document.querySelector('#topCeceScore'),
+  topCeceLabel: document.querySelector('#topCeceLabel'),
+  galleryHint: document.querySelector('#galleryHint'),
+  createBackupButton: document.querySelector('#createBackupButton'),
+  restoreBackupInput: document.querySelector('#restoreBackupInput'),
+  backupStatus: document.querySelector('#backupStatus'),
 };
 
 elements.input.addEventListener('change', (event) => { importPhotos(event.target.files ?? []); event.target.value = ''; });
 elements.scoreButton.addEventListener('click', () => scoreAllPhotos());
+elements.createBackupButton.addEventListener('click', () => createBackup());
+elements.restoreBackupInput.addEventListener('change', (event) => restoreBackup(event.target.files?.[0]));
 window.addEventListener('beforeunload', () => state.photos.forEach((photo) => URL.revokeObjectURL(photo.previewUrl)));
 
 function importPhotos(files) {
@@ -95,6 +115,95 @@ function persistTraining(photo) {
   localStorage.setItem(trainingStorageKey, JSON.stringify(state.training));
 }
 
+async function createBackup() {
+  const savedExamples = Object.values(state.training).filter((item) => item.savedAt && item.userRating);
+  if (!savedExamples.length) {
+    setBackupStatus('Save at least one training rating before creating a backup.', true);
+    return;
+  }
+
+  const createdAt = new Date();
+  const backup = {
+    format: backupFormat,
+    version: backupVersion,
+    createdAt: createdAt.toISOString(),
+    app: 'Photo Rater AI',
+    summary: { trainingExamples: savedExamples.length, likes: state.profile.likedPhotoIds.length, dislikes: state.profile.dislikedPhotoIds.length },
+    preferenceProfile: state.profile,
+    trainingExamples: state.training,
+  };
+  const filename = `Cece-PhotoAI-Backup-${createdAt.toISOString().slice(0, 10)}.json`;
+  const file = new File([JSON.stringify(backup, null, 2)], filename, { type: 'application/json' });
+
+  try {
+    if (navigator.share && navigator.canShare?.({ files: [file] })) {
+      await navigator.share({ title: 'Cece Photo AI Backup', text: 'Save this profile backup to iCloud Drive using Save to Files.', files: [file] });
+    } else {
+      downloadFile(file, filename);
+    }
+    localStorage.setItem(lastBackupStorageKey, createdAt.toISOString());
+    setBackupStatus(`Backup created ${createdAt.toLocaleString()}. Choose Save to Files, then iCloud Drive.`);
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      setBackupStatus('Backup sharing was canceled. Your training data is still safe in this browser.', true);
+      return;
+    }
+    downloadFile(file, filename);
+    localStorage.setItem(lastBackupStorageKey, createdAt.toISOString());
+    setBackupStatus('Backup downloaded. Open it in Files and move it to iCloud Drive.');
+  }
+}
+
+function downloadFile(file, filename) {
+  const url = URL.createObjectURL(file);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function restoreBackup(file) {
+  elements.restoreBackupInput.value = '';
+  if (!file) return;
+  try {
+    const parsed = JSON.parse(await file.text());
+    if (parsed?.format !== backupFormat || !parsed.trainingExamples || !parsed.preferenceProfile) throw new Error('This is not a valid Cece Photo AI backup.');
+    const count = Object.values(parsed.trainingExamples).filter((item) => item.savedAt && item.userRating).length;
+    const approved = window.confirm(`Restore ${count} saved training examples from this backup? This will replace the training profile currently stored in this browser.`);
+    if (!approved) { setBackupStatus('Restore canceled.'); return; }
+
+    state.training = parsed.trainingExamples;
+    state.profile = { ...structuredClone(defaultPreferenceProfile), ...parsed.preferenceProfile };
+    localStorage.setItem(trainingStorageKey, JSON.stringify(state.training));
+    localStorage.setItem(preferenceStorageKey, JSON.stringify(state.profile));
+    hydrateOpenPhotosFromTraining();
+    setBackupStatus(`Restored ${count} training examples from ${file.name}.`);
+    render();
+  } catch (error) {
+    setBackupStatus(error instanceof Error ? error.message : 'The backup could not be restored.', true);
+  }
+}
+
+function hydrateOpenPhotosFromTraining() {
+  state.photos.forEach((photo) => {
+    const saved = state.training[photo.stableKey];
+    if (!saved) return;
+    photo.preference = saved.preference ?? 'neutral';
+    photo.userRating = saved.userRating ?? null;
+    photo.reasons = saved.reasons ?? [];
+    photo.userNote = saved.userNote ?? '';
+    photo.trainingSavedAt = saved.savedAt ?? null;
+  });
+}
+
+function setBackupStatus(message, isError = false) {
+  elements.backupStatus.textContent = message;
+  elements.backupStatus.classList.toggle('error', isError);
+}
+
 function render() {
   const scored = state.photos.filter((photo) => photo.overall);
   elements.uploadedCount.textContent = state.photos.length; elements.scoredCount.textContent = scored.length;
@@ -107,7 +216,12 @@ function render() {
   elements.topCeceLabel.textContent = topPhoto ? `${topPhoto.name} currently has the strongest technical score.` : 'Upload photos to discover the strongest lead image.';
   elements.galleryHint.textContent = state.isScoring ? `${state.scoringDone}/${state.scoringTotal} scored` : state.photos.length ? `${state.photos.length} candidate${state.photos.length === 1 ? '' : 's'}` : 'Ready';
   elements.scoreButton.disabled = !state.photos.length || state.isScoring; elements.scoreButton.textContent = state.isScoring ? `Scoring ${state.scoringDone}/${state.scoringTotal}` : 'Score unscored';
-  renderGallery(); renderDetail();
+  renderBackupStatus(); renderGallery(); renderDetail();
+}
+
+function renderBackupStatus() {
+  const lastBackup = localStorage.getItem(lastBackupStorageKey);
+  if (lastBackup && !elements.backupStatus.classList.contains('error')) elements.backupStatus.textContent = `Last backup created ${new Date(lastBackup).toLocaleString()}.`;
 }
 
 function renderGallery() {
