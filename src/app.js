@@ -18,7 +18,7 @@ function importPhotos(files) {
   const mapped = incoming.map((file) => {
     const stableKey = `${file.name}|${file.size}|${file.lastModified}`;
     const saved = state.training[stableKey] ?? {};
-    return { id: `${stableKey}-${crypto.randomUUID()}`, stableKey, name: file.name, size: file.size, type: file.type, previewUrl: URL.createObjectURL(file), uploadedAt: Date.now(), preference: saved.preference ?? 'neutral', userRating: saved.userRating ?? null, reasons: saved.reasons ?? [], userNote: saved.userNote ?? '' };
+    return { id: `${stableKey}-${crypto.randomUUID()}`, stableKey, name: file.name, size: file.size, type: file.type, previewUrl: URL.createObjectURL(file), uploadedAt: Date.now(), preference: saved.preference ?? 'neutral', userRating: saved.userRating ?? null, reasons: saved.reasons ?? [], userNote: saved.userNote ?? '', trainingSavedAt: saved.savedAt ?? null };
   });
   state.photos = [...mapped, ...state.photos];
   state.activeId = state.activeId ?? mapped[0]?.id ?? null;
@@ -61,22 +61,37 @@ function updatePreference(photoId, preference) {
   state.profile.categoryWeights = tuneWeights(state.profile.categoryWeights, photo, preference);
   state.profile.lastUpdated = Date.now();
   localStorage.setItem(preferenceStorageKey, JSON.stringify(state.profile));
-  saveTraining(photo); render();
+  persistTraining(photo); render();
 }
 
 function updateTraining(photoId, patch) {
   const photo = state.photos.find((item) => item.id === photoId); if (!photo) return;
-  Object.assign(photo, patch); saveTraining(photo); render();
+  Object.assign(photo, patch); photo.trainingSavedAt = null; persistTraining(photo); render();
 }
 
 function toggleReason(photoId, reason) {
   const photo = state.photos.find((item) => item.id === photoId); if (!photo) return;
   photo.reasons = photo.reasons.includes(reason) ? photo.reasons.filter((item) => item !== reason) : [...photo.reasons, reason];
-  saveTraining(photo); render();
+  photo.trainingSavedAt = null; persistTraining(photo); render();
 }
 
-function saveTraining(photo) {
-  state.training[photo.stableKey] = { name: photo.name, userRating: photo.userRating, reasons: photo.reasons, userNote: photo.userNote, preference: photo.preference, updatedAt: Date.now() };
+function commitTraining(photoId) {
+  const photo = state.photos.find((item) => item.id === photoId); if (!photo) return;
+  const note = elements.detailPanel.querySelector('#trainingNote')?.value.trim() ?? '';
+  if (!photo.userRating) {
+    photo.trainingMessage = 'Choose a 1–10 rating before saving.';
+    render();
+    return;
+  }
+  photo.userNote = note;
+  photo.trainingSavedAt = Date.now();
+  photo.trainingMessage = '';
+  persistTraining(photo);
+  render();
+}
+
+function persistTraining(photo) {
+  state.training[photo.stableKey] = { name: photo.name, userRating: photo.userRating, reasons: photo.reasons, userNote: photo.userNote, preference: photo.preference, savedAt: photo.trainingSavedAt, updatedAt: Date.now() };
   localStorage.setItem(trainingStorageKey, JSON.stringify(state.training));
 }
 
@@ -87,7 +102,7 @@ function render() {
   const totalRedFlags = scored.reduce((sum, photo) => sum + (photo.redFlags?.filter((flag) => flag.key !== 'visionPending').length ?? 0), 0);
   elements.averageScore.textContent = scored.length ? `${Math.round(scored.reduce((sum, photo) => sum + photo.overall, 0) / scored.length)}/10` : '—';
   elements.likedCount.textContent = state.profile.likedPhotoIds.length; elements.redFlagCount.textContent = totalRedFlags;
-  elements.trainingCount.textContent = Object.values(state.training).filter((item) => item.userRating || item.preference !== 'neutral').length;
+  elements.trainingCount.textContent = Object.values(state.training).filter((item) => item.savedAt && item.userRating).length;
   elements.topCeceScore.textContent = topPhoto ? `${topPhoto.ceceScore ?? topPhoto.overall}/10` : '—';
   elements.topCeceLabel.textContent = topPhoto ? `${topPhoto.name} currently has the strongest technical score.` : 'Upload photos to discover the strongest lead image.';
   elements.galleryHint.textContent = state.isScoring ? `${state.scoringDone}/${state.scoringTotal} scored` : state.photos.length ? `${state.photos.length} candidate${state.photos.length === 1 ? '' : 's'}` : 'Ready';
@@ -107,13 +122,15 @@ function renderDetail() {
   if (!photo) { elements.detailPanel.innerHTML = '<div class="empty-state">Select a photo to inspect scores and preference signals.</div>'; return; }
   if (photo.error) { elements.detailPanel.innerHTML = `<img class="detail-image" src="${photo.previewUrl}" alt="${escapeHtml(photo.name)}"><div class="empty-state">This image could not be scored: ${escapeHtml(photo.error)}</div>`; return; }
   const redFlags = photo.redFlags?.length ? photo.redFlags : [{ label: 'Pending scan', advice: 'Run scoring to surface technical publish-risk flags.' }];
+  const savedLabel = photo.trainingSavedAt ? `Saved ${new Date(photo.trainingSavedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : 'Not saved yet';
   elements.detailPanel.innerHTML = `<img class="detail-image" src="${photo.previewUrl}" alt="${escapeHtml(photo.name)}"><div class="detail-header"><div><h2>${escapeHtml(photo.name)}</h2><p>${formatBytes(photo.size)}</p></div><strong>${photo.userRating ? `You ${photo.userRating}/10` : photo.ceceScore ? `Cece ${photo.ceceScore}/10` : photo.overall ? `${photo.overall}/10` : 'Not scored'}</strong></div>
-  <section class="training-card"><h3>Teach the Cece Score</h3><p>Rate this photo the way you would personally judge it for posting.</p><div class="rating-buttons">${Array.from({ length: 10 }, (_, i) => i + 1).map((value) => `<button data-user-rating="${value}" class="${photo.userRating === value ? 'selected' : ''}">${value}</button>`).join('')}</div><div class="reason-chips">${reasonOptions.map((reason) => `<button data-reason="${escapeHtml(reason)}" class="${photo.reasons.includes(reason) ? 'selected' : ''}">${escapeHtml(reason)}</button>`).join('')}</div><label class="training-note">Why?<textarea id="trainingNote" placeholder="Example: I love the pose and social vibe, even though the lighting is dark.">${escapeHtml(photo.userNote)}</textarea></label></section>
+  <section class="training-card"><h3>Teach the Cece Score</h3><p>Rate this photo the way you would personally judge it for posting.</p><div class="rating-buttons">${Array.from({ length: 10 }, (_, i) => i + 1).map((value) => `<button data-user-rating="${value}" class="${photo.userRating === value ? 'selected' : ''}">${value}</button>`).join('')}</div><div class="reason-chips">${reasonOptions.map((reason) => `<button data-reason="${escapeHtml(reason)}" class="${photo.reasons.includes(reason) ? 'selected' : ''}">${escapeHtml(reason)}</button>`).join('')}</div><label class="training-note">Why?<textarea id="trainingNote" placeholder="Example: I love the pose and social vibe, even though the lighting is dark.">${escapeHtml(photo.userNote)}</textarea></label><div class="training-save-row"><button class="save-training-button" data-save-training>Save training</button><span class="training-save-status ${photo.trainingSavedAt ? 'saved' : ''}">${escapeHtml(photo.trainingMessage || savedLabel)}</span></div></section>
   <div class="cece-card"><span>Current automated score</span><b>${photo.ceceScore ? `${photo.ceceScore}/10` : 'Pending'}</b><p>Technical screening only. Your rating above is the training truth for future vision calibration.</p></div><div class="score-list">${ratingCategories.map((category) => `<div class="score-row"><span>${category.label}</span><meter min="1" max="10" value="${photo.scores?.[category.key] ?? 1}"></meter><b>${photo.scores?.[category.key] ?? '—'}</b></div>`).join('')}</div><div class="red-flag-list"><h3>Red flags</h3>${redFlags.map((flag) => `<article><strong>${escapeHtml(flag.label)}</strong><p>${escapeHtml(flag.advice)}</p></article>`).join('')}</div><div class="preference-actions"><button class="${photo.preference === 'liked' ? 'selected' : ''}" data-pref="liked">Like</button><button class="${photo.preference === 'disliked' ? 'selected' : ''}" data-pref="disliked">Dislike</button><button class="${photo.preference === 'neutral' ? 'selected-muted' : ''}" data-pref="neutral">Neutral</button></div><ul class="notes">${(photo.aiNotes ?? ['Run scoring to generate conservative quality feedback.']).map((note) => `<li>${escapeHtml(note)}</li>`).join('')}</ul>`;
   elements.detailPanel.querySelectorAll('[data-pref]').forEach((button) => button.addEventListener('click', () => updatePreference(photo.id, button.dataset.pref)));
   elements.detailPanel.querySelectorAll('[data-user-rating]').forEach((button) => button.addEventListener('click', () => updateTraining(photo.id, { userRating: Number(button.dataset.userRating) })));
   elements.detailPanel.querySelectorAll('[data-reason]').forEach((button) => button.addEventListener('click', () => toggleReason(photo.id, button.dataset.reason)));
-  document.querySelector('#trainingNote')?.addEventListener('change', (event) => updateTraining(photo.id, { userNote: event.target.value.trim() }));
+  elements.detailPanel.querySelector('[data-save-training]')?.addEventListener('click', () => commitTraining(photo.id));
+  elements.detailPanel.querySelector('#trainingNote')?.addEventListener('input', () => { photo.trainingSavedAt = null; });
 }
 
 function tuneWeights(weights, photo, preference) { if (!photo?.scores || preference === 'neutral') return weights; const direction = preference === 'liked' ? 0.04 : -0.03; return Object.fromEntries(ratingCategories.map(({ key }) => [key, Math.max(0.6, Math.min(1.6, weights[key] + (photo.scores[key] - 5) * direction))])); }
