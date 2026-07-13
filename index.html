@@ -23,6 +23,7 @@
           <span>Cece Score</span><strong id="topCeceScore">—</strong><p id="topCeceLabel">Upload photos to discover the strongest lead image.</p>
         </div>
       </section>
+
       <section class="stats-grid" aria-label="Photo rating summary">
         <article><strong id="uploadedCount">0</strong><span>Uploaded</span></article>
         <article><strong id="scoredCount">0</strong><span>Scored</span></article>
@@ -31,6 +32,20 @@
         <article><strong id="likedCount">0</strong><span>Preference likes</span></article>
         <article><strong id="trainingCount">0</strong><span>Training labels</span></article>
       </section>
+
+      <section class="backup-panel" aria-labelledby="backupTitle">
+        <div>
+          <p class="eyebrow">Cece Profile</p>
+          <h2 id="backupTitle">Back up your training to iCloud Drive</h2>
+          <p>Your ratings, reasons, notes, likes, dislikes, and learned weights stay in Safari until you create a backup.</p>
+        </div>
+        <div class="backup-actions">
+          <button id="createBackupButton" type="button">Create backup</button>
+          <label class="restore-button">Restore backup<input id="restoreBackupInput" type="file" accept="application/json,.json" /></label>
+        </div>
+        <p id="backupStatus" class="backup-status">No backup created in this browser yet.</p>
+      </section>
+
       <section class="workspace"><div class="gallery-panel"><div class="section-heading"><div><h2>Gallery</h2><p>Newest uploads appear first. Select any tile to inspect it.</p></div><span id="galleryHint">Ready</span></div><div id="gallery" class="photo-grid empty-state">Drop in a full shoot or camera roll export to begin comparing candidates.</div></div><aside id="detailPanel" class="detail-panel"><div class="empty-state">Select a photo to inspect scores, red flags, and preference signals.</div></aside></section>
     </main>
     <script type="module" src="./src/app.js"></script>
