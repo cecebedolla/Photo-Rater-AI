@@ -1,7 +1,7 @@
 import { defaultPreferenceProfile, ratingCategories, scorePhoto } from './aiScoring.js';
 
 const preferenceStorageKey = 'photo-rater-ai.preference-profile';
-const state = { photos: [], activeId: null, profile: loadPreferenceProfile(), isScoring: false };
+const state = { photos: [], activeId: null, profile: loadPreferenceProfile(), isScoring: false, scoringDone: 0, scoringTotal: 0 };
 
 const elements = {
   input: document.querySelector('#photoInput'),
@@ -18,7 +18,10 @@ const elements = {
   galleryHint: document.querySelector('#galleryHint'),
 };
 
-elements.input.addEventListener('change', (event) => importPhotos(event.target.files ?? []));
+elements.input.addEventListener('change', (event) => {
+  importPhotos(event.target.files ?? []);
+  event.target.value = '';
+});
 elements.scoreButton.addEventListener('click', () => scoreAllPhotos());
 window.addEventListener('beforeunload', () => state.photos.forEach((photo) => URL.revokeObjectURL(photo.previewUrl)));
 
@@ -39,15 +42,46 @@ function importPhotos(files) {
 }
 
 async function scoreAllPhotos() {
+  const queue = state.photos.filter((photo) => !photo.scores);
+  if (!queue.length || state.isScoring) return;
+
   state.isScoring = true;
+  state.scoringDone = 0;
+  state.scoringTotal = queue.length;
   render();
-  for (const photo of state.photos) {
-    if (photo.scores) continue;
-    Object.assign(photo, await scorePhoto(photo, state.profile));
-    render();
+
+  const workerCount = Math.min(2, queue.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < queue.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      const photo = queue[index];
+      try {
+        Object.assign(photo, await scorePhoto(photo, state.profile));
+      } catch (error) {
+        photo.error = error instanceof Error ? error.message : 'Scoring failed';
+      }
+      state.scoringDone += 1;
+      updateProgress();
+
+      // Rebuild the large gallery only occasionally so batches of 100+ do not freeze Safari.
+      if (state.scoringDone % 5 === 0 || state.scoringDone === state.scoringTotal) render();
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+    }
   }
+
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
   state.isScoring = false;
   render();
+}
+
+function updateProgress() {
+  const remaining = state.scoringTotal - state.scoringDone;
+  elements.scoreButton.textContent = `Scoring ${state.scoringDone}/${state.scoringTotal}`;
+  elements.galleryHint.textContent = remaining ? `${remaining} remaining` : 'Finishing…';
+  elements.scoredCount.textContent = state.photos.filter((photo) => photo.overall).length;
 }
 
 function updatePreference(photoId, preference) {
@@ -69,15 +103,15 @@ function render() {
   elements.uploadedCount.textContent = state.photos.length;
   elements.scoredCount.textContent = scored.length;
   const topPhoto = scored.toSorted((a, b) => (b.ceceScore ?? b.overall) - (a.ceceScore ?? a.overall))[0];
-  const totalRedFlags = scored.reduce((sum, photo) => sum + (photo.redFlags?.length ?? 0), 0);
+  const totalRedFlags = scored.reduce((sum, photo) => sum + (photo.redFlags?.filter((flag) => flag.key !== 'visionPending').length ?? 0), 0);
   elements.averageScore.textContent = scored.length ? `${Math.round(scored.reduce((sum, photo) => sum + photo.overall, 0) / scored.length)}/10` : '—';
   elements.likedCount.textContent = state.profile.likedPhotoIds.length;
   elements.redFlagCount.textContent = totalRedFlags;
   elements.topCeceScore.textContent = topPhoto ? `${topPhoto.ceceScore ?? topPhoto.overall}/10` : '—';
-  elements.topCeceLabel.textContent = topPhoto ? `${topPhoto.name} is currently the strongest lead.` : 'Upload photos to discover the strongest lead image.';
-  elements.galleryHint.textContent = state.photos.length ? `${state.photos.length} candidate${state.photos.length === 1 ? '' : 's'}` : 'Ready';
+  elements.topCeceLabel.textContent = topPhoto ? `${topPhoto.name} currently has the strongest technical score.` : 'Upload photos to discover the strongest lead image.';
+  elements.galleryHint.textContent = state.isScoring ? `${state.scoringDone}/${state.scoringTotal} scored` : state.photos.length ? `${state.photos.length} candidate${state.photos.length === 1 ? '' : 's'}` : 'Ready';
   elements.scoreButton.disabled = !state.photos.length || state.isScoring;
-  elements.scoreButton.textContent = state.isScoring ? 'Scoring…' : 'Score unscored';
+  elements.scoreButton.textContent = state.isScoring ? `Scoring ${state.scoringDone}/${state.scoringTotal}` : 'Score unscored';
   renderGallery();
   renderDetail();
 }
@@ -89,7 +123,7 @@ function renderGallery() {
     return;
   }
   elements.gallery.className = 'photo-grid';
-  elements.gallery.innerHTML = state.photos.map((photo) => `<button class="photo-tile ${photo.id === state.activeId ? 'active' : ''}" data-photo-id="${photo.id}"><img src="${photo.previewUrl}" alt="${escapeHtml(photo.name)}" loading="lazy"><span>${photo.ceceScore ? `Cece ${photo.ceceScore}` : photo.overall ? `${photo.overall}/10` : 'Queued'}</span>${photo.redFlags?.length ? `<em>${photo.redFlags.length} flag${photo.redFlags.length === 1 ? '' : 's'}</em>` : ''}</button>`).join('');
+  elements.gallery.innerHTML = state.photos.map((photo) => `<button class="photo-tile ${photo.id === state.activeId ? 'active' : ''}" data-photo-id="${photo.id}"><img src="${photo.previewUrl}" alt="${escapeHtml(photo.name)}" loading="lazy"><span>${photo.error ? 'Error' : photo.ceceScore ? `Cece ${photo.ceceScore}` : photo.overall ? `${photo.overall}/10` : 'Queued'}</span>${photo.redFlags?.filter((flag) => flag.key !== 'visionPending').length ? `<em>${photo.redFlags.filter((flag) => flag.key !== 'visionPending').length} flag${photo.redFlags.filter((flag) => flag.key !== 'visionPending').length === 1 ? '' : 's'}</em>` : ''}</button>`).join('');
   elements.gallery.querySelectorAll('[data-photo-id]').forEach((button) => button.addEventListener('click', () => { state.activeId = button.dataset.photoId; render(); }));
 }
 
@@ -99,8 +133,12 @@ function renderDetail() {
     elements.detailPanel.innerHTML = '<div class="empty-state">Select a photo to inspect scores and preference signals.</div>';
     return;
   }
-  const redFlags = photo.redFlags?.length ? photo.redFlags : [{ label: 'Pending scan', advice: 'Run AI scoring to surface publish-risk red flags.' }];
-  elements.detailPanel.innerHTML = `<img class="detail-image" src="${photo.previewUrl}" alt="${escapeHtml(photo.name)}"><div class="detail-header"><div><h2>${escapeHtml(photo.name)}</h2><p>${formatBytes(photo.size)}</p></div><strong>${photo.ceceScore ? `Cece ${photo.ceceScore}/10` : photo.overall ? `${photo.overall}/10` : 'Not scored'}</strong></div><div class="cece-card"><span>Cece Score</span><b>${photo.ceceScore ? `${photo.ceceScore}/10` : 'Pending'}</b><p>Weighted for profile-first confidence, warmth, eye contact, and red-flag penalties.</p></div><div class="score-list">${ratingCategories.map((category) => `<div class="score-row"><span>${category.label}</span><meter min="1" max="10" value="${photo.scores?.[category.key] ?? 1}"></meter><b>${photo.scores?.[category.key] ?? '—'}</b></div>`).join('')}</div><div class="red-flag-list"><h3>Red flags</h3>${redFlags.map((flag) => `<article><strong>${escapeHtml(flag.label)}</strong><p>${escapeHtml(flag.advice)}</p></article>`).join('')}</div><div class="preference-actions"><button class="${photo.preference === 'liked' ? 'selected' : ''}" data-pref="liked">Like</button><button class="${photo.preference === 'disliked' ? 'selected' : ''}" data-pref="disliked">Dislike</button><button class="${photo.preference === 'neutral' ? 'selected-muted' : ''}" data-pref="neutral">Neutral</button></div><ul class="notes">${(photo.aiNotes ?? ['Run AI scoring to generate strict rubric feedback.']).map((note) => `<li>${escapeHtml(note)}</li>`).join('')}</ul>`;
+  if (photo.error) {
+    elements.detailPanel.innerHTML = `<img class="detail-image" src="${photo.previewUrl}" alt="${escapeHtml(photo.name)}"><div class="empty-state">This image could not be scored: ${escapeHtml(photo.error)}</div>`;
+    return;
+  }
+  const redFlags = photo.redFlags?.length ? photo.redFlags : [{ label: 'Pending scan', advice: 'Run scoring to surface technical publish-risk flags.' }];
+  elements.detailPanel.innerHTML = `<img class="detail-image" src="${photo.previewUrl}" alt="${escapeHtml(photo.name)}"><div class="detail-header"><div><h2>${escapeHtml(photo.name)}</h2><p>${formatBytes(photo.size)}</p></div><strong>${photo.ceceScore ? `Cece ${photo.ceceScore}/10` : photo.overall ? `${photo.overall}/10` : 'Not scored'}</strong></div><div class="cece-card"><span>Cece Score</span><b>${photo.ceceScore ? `${photo.ceceScore}/10` : 'Pending'}</b><p>Conservative local quality screening. A future vision upgrade will judge expression, posing, body position, and flattering appearance.</p></div><div class="score-list">${ratingCategories.map((category) => `<div class="score-row"><span>${category.label}</span><meter min="1" max="10" value="${photo.scores?.[category.key] ?? 1}"></meter><b>${photo.scores?.[category.key] ?? '—'}</b></div>`).join('')}</div><div class="red-flag-list"><h3>Red flags</h3>${redFlags.map((flag) => `<article><strong>${escapeHtml(flag.label)}</strong><p>${escapeHtml(flag.advice)}</p></article>`).join('')}</div><div class="preference-actions"><button class="${photo.preference === 'liked' ? 'selected' : ''}" data-pref="liked">Like</button><button class="${photo.preference === 'disliked' ? 'selected' : ''}" data-pref="disliked">Dislike</button><button class="${photo.preference === 'neutral' ? 'selected-muted' : ''}" data-pref="neutral">Neutral</button></div><ul class="notes">${(photo.aiNotes ?? ['Run scoring to generate conservative quality feedback.']).map((note) => `<li>${escapeHtml(note)}</li>`).join('')}</ul>`;
   elements.detailPanel.querySelectorAll('[data-pref]').forEach((button) => button.addEventListener('click', () => updatePreference(photo.id, button.dataset.pref)));
 }
 
@@ -112,10 +150,12 @@ function tuneWeights(weights, photo, preference) {
 
 function loadPreferenceProfile() {
   const stored = localStorage.getItem(preferenceStorageKey);
-  return stored ? { ...defaultPreferenceProfile, ...JSON.parse(stored) } : structuredClone(defaultPreferenceProfile);
+  if (!stored) return structuredClone(defaultPreferenceProfile);
+  try { return { ...defaultPreferenceProfile, ...JSON.parse(stored) }; }
+  catch { return structuredClone(defaultPreferenceProfile); }
 }
 
 function formatBytes(bytes) { return `${(bytes / 1_000_000).toFixed(1)} MB`; }
-function escapeHtml(value) { return value.replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]); }
+function escapeHtml(value) { return String(value).replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]); }
 
 render();
