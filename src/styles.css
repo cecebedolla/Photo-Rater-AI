@@ -53,6 +53,10 @@ h1 { font-size: clamp(2.35rem, 11vw, 5.4rem); line-height: 0.9; margin: 0; max-w
 .reason-chips button { border-radius: 999px; padding: 8px 11px; font-size: 0.82rem; }
 .training-note { display: grid; gap: 7px; margin-top: 14px; color: #cbd5e1; font-weight: 800; }
 .training-note textarea { min-height: 92px; resize: vertical; border: 1px solid rgba(148, 163, 184, 0.25); border-radius: 14px; background: #0b1728; color: #e5edf8; padding: 12px; }
+.training-save-row { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 14px; }
+.save-training-button { border: 0; border-radius: 999px; background: #67e8f9; color: #06111f; font-weight: 900; padding: 12px 18px; }
+.training-save-status { color: #fda4af; font-size: 0.88rem; font-weight: 800; }
+.training-save-status.saved { color: #a7f3d0; }
 .cece-card { border: 1px solid rgba(167, 243, 208, 0.18); border-radius: 20px; background: linear-gradient(135deg, rgba(20, 184, 166, 0.16), rgba(59, 130, 246, 0.12)); padding: 16px; margin-bottom: 16px; }
 .cece-card b { display: block; color: #bbf7d0; font-size: 2rem; margin: 4px 0; }
 .score-list { display: grid; gap: 10px; }
