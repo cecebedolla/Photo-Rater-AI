@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "api/score-photo.js": {
+      "maxDuration": 60
+    }
+  }
+}
